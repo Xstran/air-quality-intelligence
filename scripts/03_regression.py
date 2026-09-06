@@ -577,9 +577,8 @@ plt.close()
 # CELL 18 - FINAL SUMMARY
 
 
-print("\n========================================")
 print("FINAL REGRESSION SUMMARY")
-print("========================================")
+
 
 print("Model:", selected_reg_model_name)
 print("Feature set:", selected_reg_feature_set)
