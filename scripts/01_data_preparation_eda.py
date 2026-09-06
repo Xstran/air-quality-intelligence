@@ -1,0 +1,1728 @@
+
+# CELL 1 — IMPORT LIBRARIES
+
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import matplotlib.pyplot as plt
+import requests
+import seaborn as sns
+
+
+
+# CELL 2 — FIND DATA FILES
+
+
+def find_file(filename):
+    # First check whether a full or relative path was provided
+    path = Path(filename)
+
+    if path.exists():
+        return path.resolve()
+
+    # Search the current project directory and its subfolders
+    matches = list(Path.cwd().rglob(filename))
+
+    if matches:
+        return matches[0]
+
+    # Search the user's home directory as a fallback
+    matches = list(Path.home().rglob(filename))
+
+    if matches:
+        return matches[0]
+
+    raise FileNotFoundError(
+        f"Could not find '{filename}' on the system."
+    )
+
+
+
+# CELL 3 — LOAD RAW PM2.5 DATA
+
+
+def load_data(filename):
+    try:
+        # Find the data file
+        path = find_file(filename)
+
+        # UK-AIR files contain four metadata rows before the table
+        df = pd.read_csv(path, skiprows=4)
+
+        print(f"\n{filename}")
+        print(f"Shape: {df.shape}")
+        print(df.head(5))
+
+        return df
+
+    except FileNotFoundError:
+        print(f"File not found: {filename}")
+        raise
+
+    except Exception as e:
+        print(f"Error loading {filename}: {e}")
+        raise
+
+
+# Load the three yearly datasets
+df_21 = load_data("MAN3_PM25_2021.csv")
+df_22 = load_data("MAN3_PM25_2022.csv")
+df_23 = load_data("MAN3_PM25_2023.csv")
+
+
+# CELL 4 — INITIAL DATASET INSPECTION
+
+
+for year, df in {
+    "2021": df_21,
+    "2022": df_22,
+    "2023": df_23
+}.items():
+
+    print(f"\n{year}")
+    df.info()
+
+
+# CELL 5 — STANDARDISE PM2.5 DATASETS
+
+
+def standardise_dataset(df):
+    try:
+        # Keep original dataframe unchanged
+        df = df.copy()
+
+        # Remove whitespace from column names
+        df.columns = df.columns.str.strip()
+
+        # Convert Date to datetime
+        df["Date"] = pd.to_datetime(
+            df["Date"],
+            dayfirst=True,
+            errors="coerce"
+        )
+
+        # Identify hourly PM2.5 columns
+        hourly_cols = [
+            col for col in df.columns
+            if col != "Date"
+        ]
+
+        # Convert PM2.5 measurements to numeric values
+        df[hourly_cols] = df[hourly_cols].apply(
+            pd.to_numeric,
+            errors="coerce"
+        )
+
+        return df
+
+    except Exception as e:
+        print(f"Error standardising dataset: {e}")
+        raise
+
+
+df_21_clean = standardise_dataset(df_21)
+df_22_clean = standardise_dataset(df_22)
+df_23_clean = standardise_dataset(df_23)
+
+
+# CELL 6 — CONFIRM HOURLY COLUMN STRUCTURE
+
+
+clean_datasets = {
+    "2021": df_21_clean,
+    "2022": df_22_clean,
+    "2023": df_23_clean
+}
+
+print(
+    "2021 and 2022 columns match:",
+    df_21_clean.columns.equals(df_22_clean.columns)
+)
+
+print(
+    "2021 and 2023 columns match:",
+    df_21_clean.columns.equals(df_23_clean.columns)
+)
+
+# Define hourly columns once after confirming structure
+hourly_cols = [
+    col for col in df_21_clean.columns
+    if col != "Date"
+]
+
+print("Number of hourly columns:", len(hourly_cols))
+print("Hourly columns:")
+print(hourly_cols)
+
+=
+# CELL 7 — PM2.5 DATA-QUALITY VALIDATION
+
+for year, df in clean_datasets.items():
+
+    pm_values = df[hourly_cols]
+
+    print(f"\n{year}")
+
+    # Dataset structure
+    print("Shape:", df.shape)
+
+    # Date checks
+    print("Date type:", df["Date"].dtype)
+
+    print(
+        "Date range:",
+        df["Date"].min().date(),
+        "to",
+        df["Date"].max().date()
+    )
+
+    print(
+        "Duplicate dates:",
+        df["Date"].duplicated().sum()
+    )
+
+    print(
+        "Missing/invalid Date values:",
+        df["Date"].isna().sum()
+    )
+
+    # PM2.5 missingness
+    print(
+        "Missing PM2.5 values:",
+        pm_values.isna().sum().sum()
+    )
+
+    # PM2.5 range checks
+    print(
+        "Minimum PM2.5 value:",
+        pm_values.min().min()
+    )
+
+    print(
+        "Maximum PM2.5 value:",
+        pm_values.max().max()
+    )
+
+    print(
+        "Negative PM2.5 values:",
+        (pm_values < 0).sum().sum()
+    )
+
+    print(
+        "Zero PM2.5 values:",
+        (pm_values == 0).sum().sum()
+    )
+
+
+
+# CELL 8 — DAILY HOURLY COMPLETENESS
+
+
+for year, df in clean_datasets.items():
+
+    print(f"\n{year} - Days with missing hours:")
+
+    temp = df[["Date"]].copy()
+
+    # Count missing hourly observations
+    temp["missing_hours"] = (
+        df[hourly_cols]
+        .isna()
+        .sum(axis=1)
+    )
+
+    # Count valid hourly observations
+    temp["valid_hours"] = (
+        24 - temp["missing_hours"]
+    )
+
+    missing_days = temp[
+        temp["missing_hours"] > 0
+    ][
+        ["Date", "missing_hours", "valid_hours"]
+    ]
+
+    print(missing_days.to_string())
+
+
+
+# CELL 9 — VISUALISE MISSING HOURLY OBSERVATIONS
+
+
+fig, axes = plt.subplots(
+    3,
+    1,
+    figsize=(12, 7),
+    sharex=False
+)
+
+for ax, (year, df) in zip(
+    axes,
+    clean_datasets.items()
+):
+
+    missing_hours = (
+        df[hourly_cols]
+        .isna()
+        .sum(axis=1)
+    )
+
+    ax.bar(
+        df["Date"],
+        missing_hours
+    )
+
+    ax.set_title(
+        f"Missing hourly PM2.5 values {year}"
+    )
+
+    ax.set_ylabel("Missing hours")
+    ax.set_ylim(0, 24)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 10 — CALCULATE DAILY PM2.5 MEAN
+# 75% completeness rule = at least 18 of 24 hours
+
+
+def calculate_daily_mean(df):
+    try:
+        df = df.copy()
+
+        # Count valid hourly observations
+        df["valid_hours"] = (
+            df[hourly_cols]
+            .notna()
+            .sum(axis=1)
+        )
+
+        # Count missing hours
+        df["missing_hours"] = (
+            24 - df["valid_hours"]
+        )
+
+        # Mean of available hourly PM2.5 measurements
+        df["pm25_daily_mean"] = (
+            df[hourly_cols]
+            .mean(
+                axis=1,
+                skipna=True
+            )
+        )
+
+        # Reject daily means with fewer than 18 valid hours
+        df.loc[
+            df["valid_hours"] < 18,
+            "pm25_daily_mean"
+        ] = np.nan
+
+        return df[
+            [
+                "Date",
+                "valid_hours",
+                "missing_hours",
+                "pm25_daily_mean"
+            ]
+        ]
+
+    except Exception as e:
+        print(f"Error calculating daily mean: {e}")
+        raise
+
+
+daily_21 = calculate_daily_mean(df_21_clean)
+daily_22 = calculate_daily_mean(df_22_clean)
+daily_23 = calculate_daily_mean(df_23_clean)
+
+
+
+# CELL 11 — CHECK DAYS FAILING THE 75% THRESHOLD
+
+
+for year, df in {
+    "2021": daily_21,
+    "2022": daily_22,
+    "2023": daily_23
+}.items():
+
+    print(f"\n{year} Missing daily means:")
+
+    missing = df[
+        df["pm25_daily_mean"].isna()
+    ][
+        ["Date", "valid_hours"]
+    ]
+
+    print(missing.to_string())
+
+
+
+# CELL 12 — DAILY COMPLETENESS SUMMARY
+
+
+for year, df in {
+    "2021": daily_21,
+    "2022": daily_22,
+    "2023": daily_23
+}.items():
+
+    print(f"\n{year}")
+
+    print(
+        f"Total days: {len(df)}"
+    )
+
+    print(
+        "Valid daily means:",
+        df["pm25_daily_mean"].notna().sum()
+    )
+
+    print(
+        "Missing daily means:",
+        df["pm25_daily_mean"].isna().sum()
+    )
+
+
+
+# CELL 13 — HANDLE SHORT MISSING DAILY GAPS
+# Interpolation is used only for EDA
+
+
+# Combine yearly daily datasets
+daily_all = pd.concat(
+    [
+        daily_21,
+        daily_22,
+        daily_23
+    ],
+    ignore_index=True
+)
+
+# Ensure chronological order
+daily_all = (
+    daily_all
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
+
+# Restrict analysis to available 2023 PM2.5 period
+daily_all = daily_all[
+    daily_all["Date"]
+    <= pd.Timestamp("2023-11-05")
+].reset_index(drop=True)
+
+# Identify missing daily PM2.5 values
+missing_mask = (
+    daily_all["pm25_daily_mean"]
+    .isna()
+)
+
+# Group consecutive missing/non-missing periods
+gap_group = (
+    missing_mask
+    != missing_mask.shift()
+).cumsum()
+
+# Determine gap length
+gap_size = (
+    missing_mask
+    .groupby(gap_group)
+    .transform("sum")
+)
+
+# Create interpolated EDA series
+daily_all[
+    "pm25_daily_mean_interpolated"
+] = (
+    daily_all["pm25_daily_mean"]
+    .interpolate(method="linear")
+)
+
+# Only retain interpolation for gaps <= 2 days
+daily_all.loc[
+    missing_mask & (gap_size > 2),
+    "pm25_daily_mean_interpolated"
+] = np.nan
+
+# Record which observations were interpolated
+daily_all["was_interpolated"] = (
+    daily_all["pm25_daily_mean"].isna()
+    & daily_all[
+        "pm25_daily_mean_interpolated"
+    ].notna()
+)
+
+# Exclude remaining long gaps from EDA
+daily_pm25_clean = (
+    daily_all
+    .dropna(
+        subset=[
+            "pm25_daily_mean_interpolated"
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+print(
+    "Total days after cleaning:",
+    len(daily_pm25_clean)
+)
+
+print(
+    "Date range:",
+    daily_pm25_clean["Date"].min().date(),
+    "to",
+    daily_pm25_clean["Date"].max().date()
+)
+
+print(
+    "Remaining missing values:",
+    daily_pm25_clean[
+        "pm25_daily_mean_interpolated"
+    ].isna().sum()
+)
+
+print(
+    "Days interpolated:",
+    daily_all["was_interpolated"].sum()
+)
+
+print(
+    "Days excluded (long gaps):",
+    daily_all[
+        "pm25_daily_mean_interpolated"
+    ].isna().sum()
+)
+
+
+
+# CELL 14 — INSPECT INTERPOLATED DAYS
+
+interpolated_days = daily_pm25_clean[
+    daily_pm25_clean["was_interpolated"]
+][
+    [
+        "Date",
+        "pm25_daily_mean",
+        "pm25_daily_mean_interpolated"
+    ]
+]
+
+print(
+    "Total days in cleaned dataset:",
+    len(daily_pm25_clean)
+)
+
+print(
+    "Days with original values:",
+    (
+        daily_pm25_clean["was_interpolated"]
+        == False
+    ).sum()
+)
+
+print(
+    "Days with interpolated values:",
+    len(interpolated_days)
+)
+
+print("\nInterpolated days:")
+
+print(
+    interpolated_days.to_string(
+        index=False
+    )
+)
+
+
+
+# CELL 15 — PREPARE EDA FEATURES
+
+# Separate dataframe for EDA
+eda_pm25 = daily_pm25_clean.copy()
+
+# Interpolated column is used for EDA only
+pm25_col = "pm25_daily_mean_interpolated"
+
+# Binary WHO threshold indicator
+eda_pm25["high_pm25_day"] = (
+    eda_pm25[pm25_col] > 15
+).astype(int)
+
+# Calendar features
+eda_pm25["year"] = (
+    eda_pm25["Date"].dt.year
+)
+
+eda_pm25["month"] = (
+    eda_pm25["Date"].dt.month
+)
+
+eda_pm25["month_name"] = (
+    eda_pm25["Date"].dt.month_name()
+)
+
+# UK meteorological seasons
+eda_pm25["season"] = (
+    eda_pm25["month"].map(
+        {
+            1: "Winter",
+            2: "Winter",
+            3: "Spring",
+            4: "Spring",
+            5: "Spring",
+            6: "Summer",
+            7: "Summer",
+            8: "Summer",
+            9: "Autumn",
+            10: "Autumn",
+            11: "Autumn",
+            12: "Winter"
+        }
+    )
+)
+
+# Calendar-based 7-day rolling mean
+rolling_7d = (
+    eda_pm25
+    .set_index("Date")[pm25_col]
+    .rolling(
+        "7D",
+        min_periods=1
+    )
+    .mean()
+)
+
+eda_pm25["rolling_7d"] = (
+    rolling_7d.to_numpy()
+)
+
+print("Shape:", eda_pm25.shape)
+
+print(
+    "Date range:",
+    eda_pm25["Date"].min().date(),
+    "to",
+    eda_pm25["Date"].max().date()
+)
+
+print(
+    "Missing PM2.5 values:",
+    eda_pm25[pm25_col].isna().sum()
+)
+
+
+
+# CELL 16 — DAILY PM2.5 SUMMARY
+
+
+summary_table = pd.DataFrame({
+    "Metric": [
+        "Total daily observations",
+        "Mean daily PM2.5",
+        "Median daily PM2.5",
+        "Standard deviation",
+        "Minimum daily PM2.5",
+        "75th percentile",
+        "95th percentile",
+        "99th percentile",
+        "Maximum daily PM2.5",
+        "High PM2.5 days",
+        "Normal days",
+        "High PM2.5 percentage"
+    ],
+
+    "Value": [
+        len(eda_pm25),
+
+        round(
+            eda_pm25[pm25_col].mean(),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].median(),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].std(),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].min(),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].quantile(0.75),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].quantile(0.95),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].quantile(0.99),
+            2
+        ),
+
+        round(
+            eda_pm25[pm25_col].max(),
+            2
+        ),
+
+        eda_pm25["high_pm25_day"].sum(),
+
+        (
+            eda_pm25["high_pm25_day"] == 0
+        ).sum(),
+
+        f"{eda_pm25['high_pm25_day'].mean() * 100:.1f}%"
+    ]
+})
+
+display(summary_table)
+
+
+# CELL 17 — MONTH ORDER AND MONTHLY EXCEEDANCE RATE
+
+
+month_order = list(range(1, 13))
+
+month_labels = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+]
+
+monthly_exceedance_rate = (
+    eda_pm25
+    .groupby("month")["high_pm25_day"]
+    .mean()
+    .reindex(month_order)
+    * 100
+)
+
+
+
+# CELL 18 — DAILY PM2.5 TIME SERIES
+
+
+plt.figure(figsize=(14, 5))
+
+plt.plot(
+    eda_pm25["Date"],
+    eda_pm25[pm25_col],
+    linewidth=0.7,
+    alpha=0.45,
+    label="Daily PM2.5"
+)
+
+plt.plot(
+    eda_pm25["Date"],
+    eda_pm25["rolling_7d"],
+    linewidth=2,
+    label="7-day rolling mean"
+)
+
+plt.axhline(
+    15,
+    linestyle="--",
+    linewidth=1.3,
+    label="WHO guideline = 15 µg/m³"
+)
+
+plt.title("Daily PM2.5 Time Series")
+plt.xlabel("Date")
+plt.ylabel("PM2.5 (µg/m³)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 19 — DAILY PM2.5 DISTRIBUTION
+
+
+plt.figure(figsize=(9, 5))
+
+plt.hist(
+    eda_pm25[pm25_col],
+    bins=35,
+    edgecolor="black",
+    alpha=0.75
+)
+
+plt.axvline(
+    15,
+    linestyle="--",
+    linewidth=1.3,
+    label="WHO guideline = 15 µg/m³"
+)
+
+plt.title("Distribution of Daily PM2.5")
+plt.xlabel("Daily PM2.5 (µg/m³)")
+plt.ylabel("Number of Days")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(
+    "pm25_daily_distribution.png",
+    dpi=300
+)
+
+plt.show()
+
+
+
+# CELL 20 — MONTHLY PM2.5 EXCEEDANCE RATE
+
+
+plt.figure(figsize=(11, 5))
+
+plt.bar(
+    month_labels,
+    monthly_exceedance_rate.values
+)
+
+plt.title(
+    "Monthly PM2.5 Exceedance Rate"
+)
+
+plt.xlabel("Month")
+
+plt.ylabel(
+    "Days exceeding 15 µg/m³ (%)"
+)
+
+plt.xticks(rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 21 — HIGH PM2.5 DAYS BY YEAR AND MONTH
+
+
+year_month_counts = (
+    eda_pm25
+    .pivot_table(
+        index="year",
+        columns="month",
+        values="high_pm25_day",
+        aggfunc="sum"
+    )
+    .reindex(
+        index=[
+            2021,
+            2022,
+            2023
+        ],
+        columns=month_order
+    )
+)
+
+# Months without observations are hidden
+missing_mask = (
+    year_month_counts.isna()
+)
+
+heatmap_labels = (
+    year_month_counts
+    .fillna(0)
+    .astype(int)
+    .astype(str)
+)
+
+heatmap_labels = (
+    heatmap_labels.mask(
+        missing_mask,
+        ""
+    )
+)
+
+plt.figure(figsize=(10, 4))
+
+ax = sns.heatmap(
+    year_month_counts,
+    mask=missing_mask,
+    annot=heatmap_labels,
+    fmt="",
+    cmap="Reds",
+    linewidths=0.5,
+    vmin=0,
+    cbar_kws={
+        "label":
+        "Number of high PM2.5 days"
+    }
+)
+
+ax.set_title(
+    "High PM2.5 Days by Year and Month"
+)
+
+ax.set_xlabel("Month")
+ax.set_ylabel("Year")
+
+ax.set_xticklabels(
+    month_labels,
+    rotation=0
+)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 22 — SEASONAL HIGH-PM2.5 SUMMARY
+
+
+season_order = [
+    "Winter",
+    "Spring",
+    "Summer",
+    "Autumn"
+]
+
+season_summary = (
+    eda_pm25
+    .groupby("season")
+    .agg(
+        total_days=(
+            "Date",
+            "count"
+        ),
+        high_days=(
+            "high_pm25_day",
+            "sum"
+        )
+    )
+    .reindex(season_order)
+)
+
+season_summary[
+    "exceedance_rate"
+] = (
+    season_summary["high_days"]
+    / season_summary["total_days"]
+    * 100
+)
+
+display(
+    season_summary.round(2)
+)
+
+
+
+# CELL 23 — SEASONAL HIGH-PM2.5 PLOT
+
+
+plt.figure(figsize=(8, 5))
+
+bars = plt.bar(
+    season_summary.index,
+    season_summary["high_days"]
+)
+
+for bar, high_days, rate in zip(
+    bars,
+    season_summary["high_days"],
+    season_summary["exceedance_rate"]
+):
+
+    plt.text(
+        bar.get_x()
+        + bar.get_width() / 2,
+        bar.get_height() + 0.8,
+        f"{int(high_days)} days\n({rate:.1f}%)",
+        ha="center",
+        va="bottom"
+    )
+
+plt.title(
+    "High PM2.5 Days by Season"
+)
+
+plt.xlabel("Season")
+
+plt.ylabel(
+    "Number of high PM2.5 days"
+)
+
+plt.ylim(
+    0,
+    season_summary["high_days"].max() + 8
+)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 24 — YEARLY PM2.5 SUMMARY
+
+
+year_summary = (
+    eda_pm25
+    .groupby("year")
+    .agg(
+        days=(
+            "Date",
+            "count"
+        ),
+        mean_pm25=(
+            pm25_col,
+            "mean"
+        ),
+        median_pm25=(
+            pm25_col,
+            "median"
+        ),
+        max_pm25=(
+            pm25_col,
+            "max"
+        ),
+        high_days=(
+            "high_pm25_day",
+            "sum"
+        )
+    )
+    .reset_index()
+)
+
+year_summary[
+    "high_day_percentage"
+] = (
+    year_summary["high_days"]
+    / year_summary["days"]
+    * 100
+)
+
+display(
+    year_summary.round(2)
+)
+
+
+
+# CELL 25 — IDENTIFY CONSECUTIVE HIGH-PM2.5 EPISODES
+
+
+episode_data = eda_pm25[
+    [
+        "Date",
+        pm25_col,
+        "high_pm25_day"
+    ]
+].copy()
+
+# Calendar gap between observations
+episode_data["date_gap"] = (
+    episode_data["Date"]
+    .diff()
+    .dt.days
+)
+
+# Start a new episode if status changes or dates are not consecutive
+episode_data[
+    "episode_group"
+] = (
+    (
+        episode_data["high_pm25_day"]
+        != episode_data[
+            "high_pm25_day"
+        ].shift()
+    )
+    | (
+        episode_data["date_gap"]
+        != 1
+    )
+).cumsum()
+
+# Summarise high-pollution episodes
+high_episodes = (
+    episode_data[
+        episode_data["high_pm25_day"] == 1
+    ]
+    .groupby("episode_group")
+    .agg(
+        start_date=(
+            "Date",
+            "min"
+        ),
+        end_date=(
+            "Date",
+            "max"
+        ),
+        duration_days=(
+            "Date",
+            "count"
+        ),
+        max_pm25=(
+            pm25_col,
+            "max"
+        ),
+        mean_pm25=(
+            pm25_col,
+            "mean"
+        )
+    )
+    .reset_index(drop=True)
+    .sort_values(
+        [
+            "duration_days",
+            "max_pm25"
+        ],
+        ascending=False
+    )
+)
+
+display(
+    high_episodes.head(15)
+)
+
+
+
+# CELL 26 — PLOT LONGEST HIGH-PM2.5 EPISODES
+
+
+top_episodes = (
+    high_episodes
+    .head(10)
+    .copy()
+)
+
+top_episodes["episode"] = (
+    top_episodes["start_date"]
+    .dt.strftime("%Y-%m-%d")
+    + " to "
+    + top_episodes["end_date"]
+    .dt.strftime("%Y-%m-%d")
+)
+
+plt.figure(figsize=(10, 5))
+
+bars = plt.barh(
+    top_episodes["episode"],
+    top_episodes["duration_days"]
+)
+
+for bar, duration in zip(
+    bars,
+    top_episodes["duration_days"]
+):
+
+    plt.text(
+        bar.get_width() + 0.1,
+        bar.get_y()
+        + bar.get_height() / 2,
+        f"{duration} days",
+        va="center"
+    )
+
+plt.title(
+    "Longest WHO PM2.5 Exceedance Episodes"
+)
+
+plt.xlabel("Duration in Days")
+plt.ylabel("Episode Period")
+
+plt.gca().invert_yaxis()
+
+plt.xlim(
+    0,
+    top_episodes[
+        "duration_days"
+    ].max() + 1.5
+)
+
+plt.subplots_adjust(
+    left=0.30,
+    right=0.90,
+    top=0.88,
+    bottom=0.15
+)
+
+plt.show()
+
+
+
+# CELL 27 — LOAD METEOROLOGICAL DATA
+# OPEN-METEO HISTORICAL ERA5 API
+
+
+url = "https://archive-api.open-meteo.com/v1/era5"
+
+# Manchester Piccadilly monitoring-site coordinates
+LAT = 53.4815
+LON = -2.2379
+
+# Wider initial set of meteorological variables
+test_variables = [
+    "temperature_2m_mean",
+    "relative_humidity_2m_mean",
+    "dew_point_2m_mean",
+    "precipitation_sum",
+    "wind_speed_10m_mean",
+    "wind_direction_10m_dominant",
+    "pressure_msl_mean",
+    "shortwave_radiation_sum",
+    "cloud_cover_mean",
+    "wind_gusts_10m_max",
+    "et0_fao_evapotranspiration"
+]
+
+params = {
+    "latitude": LAT,
+    "longitude": LON,
+    "start_date": "2021-01-01",
+    "end_date": "2023-11-05",
+    "daily": ",".join(
+        test_variables
+    ),
+    "timezone": "Europe/London"
+}
+
+try:
+    response = requests.get(
+        url,
+        params=params,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    print(
+        "Status code:",
+        response.status_code
+    )
+
+    # Convert JSON daily weather values to dataframe
+    weather_test = pd.DataFrame(
+        response.json()["daily"]
+    )
+
+except requests.exceptions.RequestException as e:
+    print(
+        f"Error fetching weather data: {e}"
+    )
+    raise
+
+
+# Rename and parse Date
+weather_test = weather_test.rename(
+    columns={
+        "time": "Date"
+    }
+)
+
+weather_test["Date"] = pd.to_datetime(
+    weather_test["Date"]
+)
+
+print(
+    "Shape:",
+    weather_test.shape
+)
+
+print(
+    "Date range:",
+    weather_test["Date"].min().date(),
+    "to",
+    weather_test["Date"].max().date()
+)
+
+print("\nData types:")
+print(weather_test.dtypes)
+
+print("\nMissing values per variable:")
+print(weather_test.isna().sum())
+
+print(
+    "\nDuplicate dates:",
+    weather_test["Date"]
+    .duplicated()
+    .sum()
+)
+
+display(
+    weather_test
+    .describe()
+    .round(2)
+)
+
+
+
+# CELL 28 — METEOROLOGICAL PLAUSIBILITY CHECKS
+
+
+variable_ranges = {
+
+    "temperature_2m_mean":
+        [-10, 30],
+
+    "relative_humidity_2m_mean":
+        [0, 100],
+
+    "dew_point_2m_mean":
+        [-9, 29],
+
+    "precipitation_sum":
+        [0, 100],
+
+    "wind_speed_10m_mean":
+        [0, 100],
+
+    "wind_direction_10m_dominant":
+        [0, 360],
+
+    "pressure_msl_mean":
+        [950, 1060],
+
+    "shortwave_radiation_sum":
+        [0, 40],
+
+    "cloud_cover_mean":
+        [0, 100],
+
+    "wind_gusts_10m_max":
+        [0, 135],
+
+    "et0_fao_evapotranspiration":
+        [0, 15]
+}
+
+plausibility_results = []
+
+for var, limits in variable_ranges.items():
+
+    expected_min = limits[0]
+    expected_max = limits[1]
+
+    actual_min = (
+        weather_test[var].min()
+    )
+
+    actual_max = (
+        weather_test[var].max()
+    )
+
+    below_count = (
+        weather_test[var]
+        < expected_min
+    ).sum()
+
+    above_count = (
+        weather_test[var]
+        > expected_max
+    ).sum()
+
+    plausibility_results.append({
+        "Variable": var,
+        "Expected min": expected_min,
+        "Expected max": expected_max,
+        "Actual min": round(
+            actual_min,
+            2
+        ),
+        "Actual max": round(
+            actual_max,
+            2
+        ),
+        "Below range": below_count,
+        "Above range": above_count
+    })
+
+plausibility_table = pd.DataFrame(
+    plausibility_results
+)
+
+display(plausibility_table)
+
+
+
+# CELL 29 — METEOROLOGICAL VARIABLE UNITS
+
+
+variable_units = {
+
+    "temperature_2m_mean":
+        "°C",
+
+    "relative_humidity_2m_mean":
+        "%",
+
+    "dew_point_2m_mean":
+        "°C",
+
+    "precipitation_sum":
+        "mm",
+
+    "wind_speed_10m_mean":
+        "km/h",
+
+    "wind_direction_10m_dominant":
+        "°",
+
+    "pressure_msl_mean":
+        "hPa",
+
+    "shortwave_radiation_sum":
+        "MJ/m²",
+
+    "cloud_cover_mean":
+        "%",
+
+    "wind_gusts_10m_max":
+        "km/h",
+
+    "et0_fao_evapotranspiration":
+        "mm"
+}
+
+
+
+# CELL 30 — METEOROLOGICAL TIME-SERIES PLOTS
+
+
+fig, axes = plt.subplots(
+    4,
+    3,
+    figsize=(25, 20)
+)
+
+axes = axes.flatten()
+
+for i, var in enumerate(
+    test_variables
+):
+
+    # Daily weather value
+    axes[i].plot(
+        weather_test["Date"],
+        weather_test[var],
+        linewidth=0.6,
+        alpha=0.4,
+        label="Daily value"
+    )
+
+    # Seven-day rolling trend
+    axes[i].plot(
+        weather_test["Date"],
+        weather_test[var]
+        .rolling(
+            7,
+            min_periods=1
+        )
+        .mean(),
+        linewidth=2,
+        label="7-day rolling mean"
+    )
+
+    axes[i].set_title(
+        f"{var.replace('_', ' ').title()} "
+        f"({variable_units[var]})"
+    )
+
+    axes[i].set_xlabel("Date")
+
+    axes[i].set_ylabel(
+        variable_units[var]
+    )
+
+    axes[i].legend()
+
+    axes[i].grid(
+        True,
+        alpha=0.3
+    )
+
+# Remove unused subplot
+fig.delaxes(
+    axes[len(test_variables)]
+)
+
+plt.suptitle(
+    "Time-Series Trends of Key Meteorological Variables",
+    fontsize=14,
+    y=0.995
+)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# CELL 31 — MONTHLY METEOROLOGICAL SUMMARY
+
+
+weather_monthly = weather_test.copy()
+
+weather_monthly["month"] = (
+    weather_monthly["Date"].dt.month
+)
+
+monthly_weather_summary = (
+    weather_monthly
+    .groupby("month")
+    .agg(
+        available_days=(
+            "Date",
+            "count"
+        ),
+        mean_temperature=(
+            "temperature_2m_mean",
+            "mean"
+        ),
+        mean_humidity=(
+            "relative_humidity_2m_mean",
+            "mean"
+        ),
+        mean_dew_point=(
+            "dew_point_2m_mean",
+            "mean"
+        ),
+        mean_daily_precipitation=(
+            "precipitation_sum",
+            "mean"
+        ),
+        total_precipitation=(
+            "precipitation_sum",
+            "sum"
+        ),
+        mean_wind_speed=(
+            "wind_speed_10m_mean",
+            "mean"
+        ),
+        mean_pressure=(
+            "pressure_msl_mean",
+            "mean"
+        ),
+        mean_radiation=(
+            "shortwave_radiation_sum",
+            "mean"
+        ),
+        mean_cloud_cover=(
+            "cloud_cover_mean",
+            "mean"
+        ),
+        mean_wind_gusts=(
+            "wind_gusts_10m_max",
+            "mean"
+        ),
+        mean_evapotranspiration=(
+            "et0_fao_evapotranspiration",
+            "mean"
+        )
+    )
+    .reindex(month_order)
+)
+
+monthly_weather_summary.index = (
+    month_labels
+)
+
+display(
+    monthly_weather_summary.round(2)
+)
+
+
+
+# CELL 32 — MERGE PM2.5 AND METEOROLOGICAL DATA
+
+
+pm25_merge = eda_pm25[
+    [
+        "Date",
+        "pm25_daily_mean",
+        "pm25_daily_mean_interpolated",
+        "was_interpolated",
+        "high_pm25_day",
+        "year",
+        "month",
+        "season"
+    ]
+].copy()
+
+df_merged = pd.merge(
+    pm25_merge,
+    weather_test,
+    on="Date",
+    how="inner"
+)
+
+print(
+    "Merged dataset shape:",
+    df_merged.shape
+)
+
+print(
+    "Date range:",
+    df_merged["Date"].min().date(),
+    "to",
+    df_merged["Date"].max().date()
+)
+
+print("\nMissing values after merge:")
+
+print(
+    df_merged.isna().sum()
+)
+
+
+
+# CELL 33 — CIRCULAR WIND-DIRECTION ENCODING
+
+
+# Convert degrees to radians
+wind_direction_rad = np.deg2rad(
+    df_merged[
+        "wind_direction_10m_dominant"
+    ]
+)
+
+# Sine and cosine encode circular direction
+df_merged[
+    "wind_direction_sin"
+] = np.sin(
+    wind_direction_rad
+)
+
+df_merged[
+    "wind_direction_cos"
+] = np.cos(
+    wind_direction_rad
+)
+
+display(
+    df_merged[
+        [
+            "Date",
+            "wind_direction_10m_dominant",
+            "wind_direction_sin",
+            "wind_direction_cos"
+        ]
+    ].head()
+)
+
+
+
+# CELL 34 — CORRELATION ANALYSIS USING 2021–2022 ONLY
+# 2023 remains untouched as the later holdout period
+
+
+correlation_data = df_merged[
+    df_merged["year"].isin(
+        [2021, 2022]
+    )
+].copy()
+
+correlation_cols = [
+    "pm25_daily_mean",
+    "temperature_2m_mean",
+    "relative_humidity_2m_mean",
+    "dew_point_2m_mean",
+    "precipitation_sum",
+    "wind_speed_10m_mean",
+    "wind_direction_sin",
+    "wind_direction_cos",
+    "pressure_msl_mean",
+    "shortwave_radiation_sum",
+    "cloud_cover_mean",
+    "wind_gusts_10m_max",
+    "et0_fao_evapotranspiration"
+]
+
+pm25_correlation = (
+    correlation_data[
+        correlation_cols
+    ]
+    .corr()[
+        "pm25_daily_mean"
+    ]
+    .sort_values(
+        ascending=False
+    )
+)
+
+display(
+    pm25_correlation.round(3)
+)
+
+
+
+# CELL 35 — CORRELATION HEATMAP
+
+
+corr_matrix = (
+    correlation_data[
+        correlation_cols
+    ]
+    .corr()
+    .round(2)
+)
+
+plt.figure(
+    figsize=(13, 9)
+)
+
+sns.heatmap(
+    corr_matrix,
+    annot=True,
+    fmt=".2f",
+    cmap="coolwarm",
+    center=0,
+    linewidths=0.5
+)
+
+plt.title(
+    "Correlation Matrix of PM2.5 and Meteorological Variables"
+)
+
+plt.tight_layout()
+plt.show()
+
+
+# CELL 36 — SAVE PREPARED DAILY DATA FOR MODELLING NOTEBOOKS
+
+
+# Create the processed-data directory if it does not already exist
+processed_dir = Path("../data/processed")
+processed_dir.mkdir(parents=True, exist_ok=True)
+
+# Save the merged daily PM2.5 + meteorological dataset
+processed_path = processed_dir / "merged_daily_data.csv"
+
+df_merged.to_csv(
+    processed_path,
+    index=False
+)
+
+print(
+    "Prepared modelling data saved to:",
+    processed_path
+)
+
+print(
+    "Shape:",
+    df_merged.shape
+)
+
+# END OF 01_data_preparation_eda.ipynb
