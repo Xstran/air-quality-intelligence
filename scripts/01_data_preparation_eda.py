@@ -1700,29 +1700,20 @@ plt.tight_layout()
 plt.show()
 
 
-# CELL 36 — SAVE PREPARED DAILY DATA FOR MODELLING NOTEBOOKS
+# SAVE PREPARED DATASET FOR MODELLING
 
 
-# Create the processed-data directory if it does not already exist
-processed_dir = Path("../data/processed")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+processed_dir = PROJECT_ROOT / "data" / "processed"
 processed_dir.mkdir(parents=True, exist_ok=True)
 
-# Save the merged daily PM2.5 + meteorological dataset
 processed_path = processed_dir / "merged_daily_data.csv"
 
 df_merged.to_csv(
     processed_path,
-    index=False
+    index=False,
 )
 
-print(
-    "Prepared modelling data saved to:",
-    processed_path
-)
-
-print(
-    "Shape:",
-    df_merged.shape
-)
-
-# END OF 01_data_preparation_eda.ipynb
+print("\nPrepared modelling dataset saved to:")
+print(processed_path)
+print("Shape:", df_merged.shape)
