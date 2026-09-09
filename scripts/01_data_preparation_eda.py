@@ -1164,18 +1164,16 @@ plt.show()
 
 
 
-# CELL 27 — LOAD METEOROLOGICAL DATA
-# OPEN-METEO HISTORICAL ERA5 API
-
+# ============================================================
+# DOWNLOAD METEOROLOGICAL DATA
+# ============================================================
 
 url = "https://archive-api.open-meteo.com/v1/era5"
 
-# Manchester Piccadilly monitoring-site coordinates
 LAT = 53.4815
 LON = -2.2379
 
-# Wider initial set of meteorological variables
-test_variables = [
+weather_variables = [
     "temperature_2m_mean",
     "relative_humidity_2m_mean",
     "dew_point_2m_mean",
@@ -1186,7 +1184,7 @@ test_variables = [
     "shortwave_radiation_sum",
     "cloud_cover_mean",
     "wind_gusts_10m_max",
-    "et0_fao_evapotranspiration"
+    "et0_fao_evapotranspiration",
 ]
 
 params = {
@@ -1194,80 +1192,40 @@ params = {
     "longitude": LON,
     "start_date": "2021-01-01",
     "end_date": "2023-11-05",
-    "daily": ",".join(
-        test_variables
-    ),
-    "timezone": "Europe/London"
+    "daily": ",".join(weather_variables),
+    "timezone": "Europe/London",
 }
 
 try:
-    response = requests.get(
-        url,
-        params=params,
-        timeout=30
-    )
-
+    response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
 
-    print(
-        "Status code:",
-        response.status_code
-    )
+    weather_test = pd.DataFrame(response.json()["daily"])
 
-    # Convert JSON daily weather values to dataframe
-    weather_test = pd.DataFrame(
-        response.json()["daily"]
-    )
+except requests.exceptions.RequestException as error:
+    raise RuntimeError(
+        f"Failed to download meteorological data: {error}"
+    ) from error
 
-except requests.exceptions.RequestException as e:
-    print(
-        f"Error fetching weather data: {e}"
-    )
-    raise
+weather_test = weather_test.rename(columns={"time": "Date"})
+weather_test["Date"] = pd.to_datetime(weather_test["Date"])
 
-
-# Rename and parse Date
-weather_test = weather_test.rename(
-    columns={
-        "time": "Date"
-    }
-)
-
-weather_test["Date"] = pd.to_datetime(
-    weather_test["Date"]
-)
-
-print(
-    "Shape:",
-    weather_test.shape
-)
-
+print("\nMeteorological data downloaded successfully")
+print("Shape:", weather_test.shape)
 print(
     "Date range:",
     weather_test["Date"].min().date(),
     "to",
-    weather_test["Date"].max().date()
+    weather_test["Date"].max().date(),
 )
 
-print("\nData types:")
-print(weather_test.dtypes)
-
-print("\nMissing values per variable:")
+print("\nMissing weather values:")
 print(weather_test.isna().sum())
 
-print(
-    "\nDuplicate dates:",
-    weather_test["Date"]
-    .duplicated()
-    .sum()
-)
-
-display(
-    weather_test
-    .describe()
-    .round(2)
-)
-
+if weather_test[weather_variables].isna().any().any():
+    raise ValueError(
+        "Meteorological dataset contains missing values."
+    )
 
 
 # CELL 28 — METEOROLOGICAL PLAUSIBILITY CHECKS
