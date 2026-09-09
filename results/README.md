@@ -2,13 +2,48 @@
 
 Key visual outputs from the PM2.5 modelling project.
 
-## Included figures
+## Classification
 
-- `correlation_heatmap.png` — PM2.5 and meteorological correlation analysis
-- `classification_confusion_matrix.png` — final classifier confusion matrix
-- `classification_precision_recall_curve.png` — precision-recall curve
-- `classification_roc_curve.png` — ROC curve
-- `classification_shap_summary.png` — classifier SHAP explanations
-- `regression_observed_vs_predicted.png` — observed vs predicted PM2.5
-- `regression_shap_summary.png` — regression SHAP explanations
-- `arimax_observed_vs_predicted.png` — walk-forward ARIMAX forecast
+### Confusion Matrix
+
+![Classification Confusion Matrix](classification_confusion_matrix.png)
+
+### Precision-Recall Curve
+
+![Precision Recall Curve](classification_precision_recall_curve.png)
+
+### ROC Curve
+
+![ROC Curve](classification_roc_curve.png)
+
+### SHAP Explainability
+
+![Classification SHAP](classification_shap_summary.png)
+
+---
+
+## Regression
+
+### Observed vs Predicted PM2.5
+
+![Regression Observed vs Predicted](regression_observed_vs_predicted.png)
+
+### SHAP Explainability
+
+![Regression SHAP](regression_shap_summary.png)
+
+---
+
+## Time-Series Forecasting
+
+### Walk-Forward ARIMAX Forecast
+
+![ARIMAX Forecast](arimax_observed_vs_predicted.png)
+
+---
+
+## Exploratory Analysis
+
+### PM2.5 and Meteorological Correlations
+
+![Correlation Heatmap](correlation_heatmap.png)
